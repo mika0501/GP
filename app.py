@@ -23,17 +23,26 @@ def parse_gp_invoice(file_bytes):
                 full_text += t + "\n"
 
     # ================= 1. INVOICE NUMBER =================
-    inv_dash_match = re.search(r"\b([0-9]{2}-[0-9]{5,})\b", full_text)
-    if inv_dash_match:
-        invoice_number = inv_dash_match.group(1).strip()
+    # 相容 6碼-3碼 (如 091726-005) 與 2碼-5碼以上 (如 26-100508)
+    invoice_number = ""
+    dash_6_match = re.search(r"\b(\d{6}\s*-\s*\d{3})\b", full_text)
+    if dash_6_match:
+        invoice_number = dash_6_match.group(1).strip()
     else:
-        inv_label = re.search(
-            r"INVOICE\s*#?\s*\n?\s*([A-Za-z0-9\-]+)", full_text, re.IGNORECASE
-        )
-        invoice_number = inv_label.group(1).strip() if inv_label else ""
+        inv_dash_match = re.search(r"\b([0-9]{2}-[0-9]{5,})\b", full_text)
+        if inv_dash_match:
+            invoice_number = inv_dash_match.group(1).strip()
+        else:
+            inv_label = re.search(
+                r"INVOICE\s*#?\s*[:：]?\s*\n?\s*([A-Za-z0-9\-]+)",
+                full_text,
+                re.IGNORECASE,
+            )
+            if inv_label:
+                invoice_number = inv_label.group(1).strip()
 
     # ================= 2. INVOICE DATE =================
-    # 優先鎖定打勾處的 Invoice date:
+    # 優先鎖定打勾處的 Invoice date:，找不到才備援抓取表格 DATE
     date_match = re.search(
         r"Invoice\s*date\s*[:：]?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})",
         full_text,
@@ -48,7 +57,7 @@ def parse_gp_invoice(file_bytes):
     invoice_date = date_match.group(1).strip() if date_match else ""
 
     # ================= 3. TOTAL AMOUNT =================
-    # 相容整數與小數，並轉為 Excel 純數值 (float / None)
+    # 轉為 Excel 純數值 (float / None)，相容有無小數點
     total_match = re.search(
         r"TOTAL\s*[:：]?\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?|\d+)",
         full_text,
@@ -149,34 +158,4 @@ if uploaded_files:
         try:
             old_df = pd.read_excel(existing_file)
             final_df = pd.concat([old_df, new_df], ignore_index=True)
-            if "INVOICE NUMBER" in final_df.columns:
-                final_df = final_df.drop_duplicates(
-                    subset=["INVOICE NUMBER"], keep="last"
-                )
-            st.success(
-                f"🎉 成功解析 {len(records)} 筆發票，並累加至現有 Excel！目前共 {len(final_df)} 筆資料。"
-            )
-        except Exception as e:
-            st.error(f"讀取既有 Excel 失敗: {e}")
-            final_df = new_df
-    else:
-        final_df = new_df
-        st.success(f"🎉 成功解析 {len(records)} 筆發票資料！")
-
-    # 預覽表格
-    st.subheader("📊 擷取結果預覽")
-    st.dataframe(final_df, use_container_width=True)
-
-    # 匯出 Excel
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="openpyxl") as writer:
-        final_df.to_excel(writer, index=False, sheet_name="GP_Invoices")
-    excel_data = output.getvalue()
-
-    st.download_button(
-        label="📥 下載整理好的 Excel 檔案 (.xlsx)",
-        data=excel_data,
-        file_name="GP_Cargo_發票整理.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-    )
+            if "INVOICE NUMBER"
