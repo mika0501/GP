@@ -23,7 +23,6 @@ def parse_gp_invoice(file_bytes):
                 full_text += t + "\n"
 
     # ================= 1. INVOICE NUMBER =================
-    # 鎖定 26-100508 這類格式，排除左上角地址數字
     inv_dash_match = re.search(r"\b([0-9]{2}-[0-9]{5,})\b", full_text)
     if inv_dash_match:
         invoice_number = inv_dash_match.group(1).strip()
@@ -34,30 +33,36 @@ def parse_gp_invoice(file_bytes):
         invoice_number = inv_label.group(1).strip() if inv_label else ""
 
     # ================= 2. INVOICE DATE =================
+    # 優先鎖定打勾處的 Invoice date:
     date_match = re.search(
-        r"DATE\s*\n?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})",
+        r"Invoice\s*date\s*[:：]?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})",
         full_text,
         re.IGNORECASE,
     )
     if not date_match:
         date_match = re.search(
-            r"Invoice\s*date[:：]?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})",
+            r"\bDATE\s*\n?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})",
             full_text,
             re.IGNORECASE,
         )
     invoice_date = date_match.group(1).strip() if date_match else ""
 
     # ================= 3. TOTAL AMOUNT =================
+    # 相容整數與小數，並轉為 Excel 純數值 (float / None)
     total_match = re.search(
-        r"TOTAL\s*\$?\s*([0-9,]+(?:\.[0-9]{2})?)", full_text, re.IGNORECASE
+        r"TOTAL\s*[:：]?\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?|\d+)",
+        full_text,
+        re.IGNORECASE,
     )
-    total_amount = ""
+    total_amount = None
     if total_match:
-        val = total_match.group(1).strip()
-        total_amount = f"${val}"
+        val_str = total_match.group(1).replace(",", "").strip()
+        try:
+            total_amount = float(val_str)
+        except ValueError:
+            total_amount = None
 
-    # ================= 4. REMARK (紅色底線) =================
-    # 策略 A: 優先抓第 1 行 "Trucking Shipping Fee <代碼> from"
+    # ================= 4. REMARK =================
     remark = ""
     fee_match = re.search(
         r"Trucking\s+Shipping\s+Fee\s+([A-Za-z0-9]+)\s+from",
@@ -67,15 +72,13 @@ def parse_gp_invoice(file_bytes):
     if fee_match:
         remark = fee_match.group(1).strip()
     else:
-        # 策略 B: 從下方的 PO# 抓取代碼 (例如 PO#FCU260924008)
         po_match = re.search(
             r"PO#?\s*([A-Za-z0-9]+)", full_text, re.IGNORECASE
         )
         if po_match:
             remark = po_match.group(1).strip()
 
-    # ================= 5. FROM (橘色底線) =================
-    # 抓取 "from GP-75234 to" 中的 GP-75234
+    # ================= 5. FROM =================
     from_val = ""
     from_match = re.search(
         r"\bfrom\s+([A-Za-z0-9\-]+)\s+to\b", full_text, re.IGNORECASE
@@ -83,8 +86,7 @@ def parse_gp_invoice(file_bytes):
     if from_match:
         from_val = from_match.group(1).strip()
 
-    # ================= 6. TO (黃色底線) =================
-    # 抓取 "to TZR4" 中的 TZR4 (遇到換行、空格或結尾截斷)
+    # ================= 6. TO =================
     to_val = ""
     to_match = re.search(
         r"\bto\s+([A-Za-z0-9\-]+)(?:\s+|\n|$)", full_text, re.IGNORECASE
@@ -92,8 +94,7 @@ def parse_gp_invoice(file_bytes):
     if to_match:
         to_val = to_match.group(1).strip()
 
-    # ================= 7. MATERIAL (綠色底線) =================
-    # 抓取 "SKU#CLSCU-AA401-S" 中的代碼
+    # ================= 7. MATERIAL =================
     material = ""
     sku_match = re.search(
         r"SKU#?\s*([A-Za-z0-9\-]+)", full_text, re.IGNORECASE
@@ -148,7 +149,6 @@ if uploaded_files:
         try:
             old_df = pd.read_excel(existing_file)
             final_df = pd.concat([old_df, new_df], ignore_index=True)
-            # 依 INVOICE NUMBER 移除重複（保留最新）
             if "INVOICE NUMBER" in final_df.columns:
                 final_df = final_df.drop_duplicates(
                     subset=["INVOICE NUMBER"], keep="last"
