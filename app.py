@@ -158,4 +158,34 @@ if uploaded_files:
         try:
             old_df = pd.read_excel(existing_file)
             final_df = pd.concat([old_df, new_df], ignore_index=True)
-            if "INVOICE NUMBER"
+            if "INVOICE NUMBER" in final_df.columns:
+                final_df = final_df.drop_duplicates(
+                    subset=["INVOICE NUMBER"], keep="last"
+                )
+            st.success(
+                f"🎉 成功解析 {len(records)} 筆發票，並累加至現有 Excel！目前共 {len(final_df)} 筆資料。"
+            )
+        except Exception as e:
+            st.error(f"讀取既有 Excel 失敗: {e}")
+            final_df = new_df
+    else:
+        final_df = new_df
+        st.success(f"🎉 成功解析 {len(records)} 筆發票資料！")
+
+    # 預覽表格
+    st.subheader("📊 擷取結果預覽")
+    st.dataframe(final_df, use_container_width=True)
+
+    # 匯出 Excel
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        final_df.to_excel(writer, index=False, sheet_name="GP_Invoices")
+    excel_data = output.getvalue()
+
+    st.download_button(
+        label="📥 下載整理好的 Excel 檔案 (.xlsx)",
+        data=excel_data,
+        file_name="GP_Cargo_發票整理.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+    )
