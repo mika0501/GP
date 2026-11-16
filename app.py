@@ -170,7 +170,7 @@ if uploaded_files:
         try:
             old_df = pd.read_excel(existing_file)
             final_df = pd.concat([old_df, new_df], ignore_index=True)
-            if "INVOICE NUMBER" in final_df.columns:
+            if "INVOICE NUMBER" in final_df.columns
                 final_df = final_df.drop_duplicates(
                     subset=["INVOICE NUMBER"], keep="last"
                 )
