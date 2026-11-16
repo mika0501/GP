@@ -10,18 +10,6 @@ st.set_page_config(
 st.title("🧾 GP Cargo 發票資料自動轉 Excel 工具")
 st.caption(
     "已新增 4 個欄位：精準擷取 Remark (PO#)、From、To、Material (SKU#)，並支援累加既有 Excel！"
-)import io
-import re
-import pandas as pd
-import pdfplumber
-import streamlit as st
-
-st.set_page_config(
-    page_title="GP Cargo 發票資料擷取工具", page_icon="🧾", layout="wide"
-)
-st.title("🧾 GP Cargo 發票資料自動轉 Excel 工具")
-st.caption(
-    "已新增 4 個欄位：精準擷取 Remark (PO#)、From、To、Material (SKU#)，並支援累加既有 Excel！"
 )
 
 
@@ -170,7 +158,7 @@ if uploaded_files:
         try:
             old_df = pd.read_excel(existing_file)
             final_df = pd.concat([old_df, new_df], ignore_index=True)
-            if "INVOICE NUMBER" in final_df.columns
+            if "INVOICE NUMBER" in final_df.columns:
                 final_df = final_df.drop_duplicates(
                     subset=["INVOICE NUMBER"], keep="last"
                 )
