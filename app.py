@@ -9,7 +9,7 @@ st.set_page_config(
 )
 st.title("🧾 GP Cargo 發票資料自動轉 Excel 工具")
 st.caption(
-    "已新增 4 個欄位：精準擷取 Remark (PO#)、From、To、Material (SKU#)，並支援累加既有 Excel！"
+    "支援 GP CARGO 含空格地點、多組斜線 SKU#、純數值金額，並支援累加既有 Excel！"
 )
 
 
@@ -22,8 +22,19 @@ def parse_gp_invoice(file_bytes):
             if t:
                 full_text += t + "\n"
 
+    # 若 PDF 完全無文字層（純圖片掃描檔），標記狀態提醒
+    if not full_text.strip():
+        return {
+            "INVOICE NUMBER": "",
+            "INVOICE DATE": "",
+            "TOTAL AMOUNT": None,
+            "REMARK": "⚠️ 純圖片掃描檔（無法直接讀取文字）",
+            "FROM": "",
+            "TO": "",
+            "MATERIAL": "",
+        }
+
     # ================= 1. INVOICE NUMBER =================
-    # 相容 6碼-3碼 (如 091726-005) 與 2碼-5碼以上 (如 26-100508)
     invoice_number = ""
     dash_6_match = re.search(r"\b(\d{6}\s*-\s*\d{3})\b", full_text)
     if dash_6_match:
@@ -42,7 +53,7 @@ def parse_gp_invoice(file_bytes):
                 invoice_number = inv_label.group(1).strip()
 
     # ================= 2. INVOICE DATE =================
-    # 優先鎖定打勾處的 Invoice date:，找不到才備援抓取表格 DATE
+    # 優先鎖定打勾處的 Invoice date:
     date_match = re.search(
         r"Invoice\s*date\s*[:：]?\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{4})",
         full_text,
@@ -57,7 +68,6 @@ def parse_gp_invoice(file_bytes):
     invoice_date = date_match.group(1).strip() if date_match else ""
 
     # ================= 3. TOTAL AMOUNT =================
-    # 轉為 Excel 純數值 (float / None)，相容有無小數點
     total_match = re.search(
         r"TOTAL\s*[:：]?\s*\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?|\d+)",
         full_text,
@@ -74,7 +84,7 @@ def parse_gp_invoice(file_bytes):
     # ================= 4. REMARK =================
     remark = ""
     fee_match = re.search(
-        r"Trucking\s+Shipping\s+Fee\s+([A-Za-z0-9]+)\s+from",
+        r"Trucking\s+Shipping\s+Fee\s+([A-Za-z0-9\-]+)\s+from",
         full_text,
         re.IGNORECASE,
     )
@@ -82,31 +92,28 @@ def parse_gp_invoice(file_bytes):
         remark = fee_match.group(1).strip()
     else:
         po_match = re.search(
-            r"PO#?\s*([A-Za-z0-9]+)", full_text, re.IGNORECASE
+            r"PO#?\s*([A-Za-z0-9\-]+)", full_text, re.IGNORECASE
         )
         if po_match:
             remark = po_match.group(1).strip()
 
-    # ================= 5. FROM =================
+    # ================= 5 & 6. FROM & TO (支援含空格的 GP CARGO) =================
     from_val = ""
-    from_match = re.search(
-        r"\bfrom\s+([A-Za-z0-9\-]+)\s+to\b", full_text, re.IGNORECASE
-    )
-    if from_match:
-        from_val = from_match.group(1).strip()
-
-    # ================= 6. TO =================
     to_val = ""
-    to_match = re.search(
-        r"\bto\s+([A-Za-z0-9\-]+)(?:\s+|\n|$)", full_text, re.IGNORECASE
+    # 抓取 "from <起點> to <終點>"（遇到金額 $ 或換行時停止，完整保留 GP CARGO）
+    route_match = re.search(
+        r"\bfrom\s+([A-Za-z0-9\-\s]+?)\s+to\s+([A-Za-z0-9\-\s]+?)(?=\s+\$|\n|$)",
+        full_text,
+        re.IGNORECASE,
     )
-    if to_match:
-        to_val = to_match.group(1).strip()
+    if route_match:
+        from_val = re.sub(r"\s+", " ", route_match.group(1)).strip()
+        to_val = re.sub(r"\s+", " ", route_match.group(2)).strip()
 
-    # ================= 7. MATERIAL =================
+    # ================= 7. MATERIAL (支援斜線 / 與多組編號) =================
     material = ""
     sku_match = re.search(
-        r"SKU#?\s*([A-Za-z0-9\-]+)", full_text, re.IGNORECASE
+        r"SKU#?\s*([A-Za-z0-9\-/]+)", full_text, re.IGNORECASE
     )
     if sku_match:
         material = sku_match.group(1).strip()
@@ -160,7 +167,6 @@ if uploaded_files:
             old_df = pd.read_excel(existing_file)
             final_df = pd.concat([old_df, new_df], ignore_index=True)
             if "INVOICE NUMBER" in final_df.columns:
-                # 僅針對有抓到發票號碼的列去除重複，避免把空白列誤刪成只剩 1 列
                 has_inv = final_df["INVOICE NUMBER"].notna() & (
                     final_df["INVOICE NUMBER"].astype(str).str.strip() != ""
                 )
