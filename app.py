@@ -148,7 +148,8 @@ if uploaded_files:
 
     for i, file in enumerate(uploaded_files):
         data = parse_gp_invoice(file.read())
-        records.append(data)
+        data_with_name = {"FILENAME": file.name, **data}
+        records.append(data_with_name)
         progress_bar.progress((i + 1) / len(uploaded_files))
 
     new_df = pd.DataFrame(records)
@@ -159,9 +160,15 @@ if uploaded_files:
             old_df = pd.read_excel(existing_file)
             final_df = pd.concat([old_df, new_df], ignore_index=True)
             if "INVOICE NUMBER" in final_df.columns:
-                final_df = final_df.drop_duplicates(
+                # 僅針對有抓到發票號碼的列去除重複，避免把空白列誤刪成只剩 1 列
+                has_inv = final_df["INVOICE NUMBER"].notna() & (
+                    final_df["INVOICE NUMBER"].astype(str).str.strip() != ""
+                )
+                df_valid = final_df[has_inv].drop_duplicates(
                     subset=["INVOICE NUMBER"], keep="last"
                 )
+                df_empty = final_df[~has_inv]
+                final_df = pd.concat([df_valid, df_empty], ignore_index=True)
             st.success(
                 f"🎉 成功解析 {len(records)} 筆發票，並累加至現有 Excel！目前共 {len(final_df)} 筆資料。"
             )
