@@ -4,31 +4,54 @@ import pandas as pd
 import pdfplumber
 import streamlit as st
 
+try:
+    from pypdf import PdfReader
+    HAS_PYPDF = True
+except ImportError:
+    HAS_PYPDF = False
+
 st.set_page_config(
     page_title="GP Cargo 發票資料擷取工具", page_icon="🧾", layout="wide"
 )
-st.title("🧾 GP Cargo 發票資料自動轉 Excel 工具")
+st.title("🧾 GP Cargo 發票資料自動轉 Excel 工具（雙引擎增強版）")
 st.caption(
-    "支援 GP CARGO 含空格地點、多組斜線 SKU#、純數值金額，並支援累加既有 Excel！"
+    "支援 GP CARGO 含空格地點、多組斜線 SKU#、純數值金額，內建雙重 PDF 解析引擎！"
 )
 
 
-def extract_clean_text(file_bytes):
-    """嘗試多種容差參數提取 PDF 文字，並清理隱形控制字元"""
-    text_standard = ""
-    text_tolerant = ""
+def extract_all_possible_texts(file_bytes):
+    """使用多種引擎與容差參數提取 PDF 文字"""
+    texts = []
+
+    # 引擎 1：pdfplumber 標準模式 & 高容差模式
+    t_std = ""
+    t_tol = ""
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
-            t1 = page.extract_text() or ""
-            text_standard += t1 + "\n"
-            t2 = page.extract_text(x_tolerance=5, y_tolerance=5) or ""
-            text_tolerant += t2 + "\n"
+            t_std += (page.extract_text() or "") + "\n"
+            t_tol += (page.extract_text(x_tolerance=5, y_tolerance=5) or "") + "\n"
 
-    # 移除空字元 \x00 與異常控制字元
-    text_standard = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text_standard)
-    text_tolerant = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", text_tolerant)
+    t_std = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", t_std).strip()
+    t_tol = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", t_tol).strip()
+    if t_std:
+        texts.append(("pdfplumber_std", t_std))
+    if t_tol and t_tol != t_std:
+        texts.append(("pdfplumber_tol", t_tol))
 
-    return text_standard, text_tolerant
+    # 引擎 2：pypdf 備援引擎（針對字型映射異常的 PDF 特別有效）
+    if HAS_PYPDF:
+        try:
+            reader = PdfReader(io.BytesIO(file_bytes))
+            t_pypdf = ""
+            for page in reader.pages:
+                t_pypdf += (page.extract_text() or "") + "\n"
+            t_pypdf = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", t_pypdf).strip()
+            if t_pypdf:
+                texts.append(("pypdf", t_pypdf))
+        except Exception:
+            pass
+
+    return texts
 
 
 def parse_text_fields(full_text):
@@ -127,24 +150,33 @@ def parse_text_fields(full_text):
 
 
 def parse_gp_invoice(file_bytes):
-    """解析 GP Cargo 格式發票，並回傳解析結果與原始文字供除錯"""
-    text_std, text_tol = extract_clean_text(file_bytes)
+    """依序嘗試所有解析引擎，回傳最佳結果與原始文字"""
+    extracted_list = extract_all_possible_texts(file_bytes)
 
-    # 先嘗試標準文字解析
-    res = parse_text_fields(text_std)
+    best_res = {
+        "INVOICE NUMBER": "",
+        "INVOICE DATE": "",
+        "TOTAL AMOUNT": None,
+        "REMARK": "",
+        "FROM": "",
+        "TO": "",
+        "MATERIAL": "",
+    }
+    raw_preview = ""
 
-    # 若標準模式沒抓到發票號碼或日期，改用高容差文字重試
-    if not res["INVOICE NUMBER"] and not res["INVOICE DATE"]:
-        res_tol = parse_text_fields(text_tol)
-        if res_tol["INVOICE NUMBER"] or res_tol["INVOICE DATE"]:
-            res = res_tol
+    for engine_name, txt in extracted_list:
+        if not raw_preview:
+            raw_preview = f"[{engine_name}]\n{txt}"
+        res = parse_text_fields(txt)
+        # 只要任一引擎成功抓到發票號碼或日期，即採用該結果
+        if res["INVOICE NUMBER"] or res["INVOICE DATE"]:
+            best_res = res
+            break
 
-    # 判斷完全無有效文字的情況
-    if not text_std.strip() and not text_tol.strip():
-        res["REMARK"] = "⚠️ 無法讀取文字（字型編碼加密或掃描圖檔）"
+    if not extracted_list:
+        best_res["REMARK"] = "⚠️ 底層無任何文字（純圖片或字型編碼損壞）"
 
-    raw_preview = text_std.strip() if text_std.strip() else text_tol.strip()
-    return res, raw_preview
+    return best_res, raw_preview
 
 
 # ==================== 操作介面 ====================
@@ -223,7 +255,7 @@ if uploaded_files:
         type="primary",
     )
 
-    # 除錯透視鏡：針對沒抓到的檔案顯示底層讀出的文字
+    # 除錯透視鏡
     empty_files = [
         r["FILENAME"]
         for r in records
